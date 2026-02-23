@@ -269,7 +269,7 @@ function Num({ label, field, value, onChange, min, max, step="0.1", unit }) {
     <div style={fld.wrap}>
       <label style={fld.lbl}>{label}</label>
       <div style={{ position:"relative" }}>
-        <input type="number" min={min} max={max} step={step} value={value} onChange={e => onChange(field, e.target.value)} style={fld.inp} />
+        <input type="number" min={min} max={max} step={step} value={value} onChange={e => onChange(field, e.target.value)} style={{ ...fld.inp, paddingRight: unit ? "72px" : "14px" }} />
         {unit && <span style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:"#475569", fontSize:12, fontFamily:"'Space Mono',monospace" }}>{unit}</span>}
       </div>
       <div style={{ height:3, background:"rgba(255,255,255,0.05)", borderRadius:2, marginTop:4 }}>
@@ -384,7 +384,7 @@ export default function App() {
         <div style={{ maxWidth:1140, margin:"0 auto", padding:"0 24px", height:64, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
           <div style={{ display:"flex", alignItems:"center", gap:14 }}>
             <div>
-              <div style={{ fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:15, background:"linear-gradient(90deg,#00ff87,#00c9ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", lineHeight:1.3 }}>Predicting Heart Disease Using Machine Learning</div>
+              <div style={{ fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:15, background:"linear-gradient(90deg,#00ff87,#00c9ff)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", lineHeight:1.3 }}>Heart Disease Risk AI</div>
               <div style={{ fontFamily:"'Space Mono',monospace", fontSize:8, color:"#3d8b6b", letterSpacing:1.5, marginTop:3 }}>RISK FACTORS · MODEL OPTIMIZATION · WEB-BASED DEPLOYMENT</div>
             </div>
           </div>
