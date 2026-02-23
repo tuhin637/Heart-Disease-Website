@@ -1,25 +1,4 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pkl
-*.pth
-venv/
-.env
-
-# Node
 node_modules/
 dist/
-.vite/
-
-# Data (large file)
-data/heart_2020_cleaned.csv
-
-# Model outputs (regenerate with train_model.py)
-model/best_model.pkl
-model/label_encoders.pkl
-model/imputer.pkl
-model/model_metrics.json
-
-# OS
+.env
 .DS_Store
-Thumbs.db
