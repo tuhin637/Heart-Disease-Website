@@ -1,285 +1,282 @@
 """
-Heart Disease Prediction — FastAPI Backend
-Author : Md. Tuhinuzzaman Tuhin | DIU 221-15-4649
-Deploy : Render.com  (free tier)
+Predicting Heart Disease Using Machine Learning
+FastAPI Backend — v2.0 (2025)
+FYDP · Daffodil International University
+Author: Md. Tuhinuzzaman Tuhin (221-15-4649)
 """
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
-from typing import Literal
-import numpy as np
-import pickle, os
+from pydantic import BaseModel, Field, validator
+import pickle, json, numpy as np, os
 
-# ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Heart Disease Prediction API",
-    description="RuleNet Hybrid ML — CDC BRFSS 2020 | DIU FYDP",
-    version="2.0.0",
+    description=(
+        "Predicting Heart Disease Using Machine Learning: "
+        "An Analysis of Risk Factors, Model Optimization, and Web-Based Deployment\n\n"
+        "Algorithm: RuleNet Hybrid (RandomForest + Medical Rules)\n"
+        "Dataset: CDC BRFSS 2020 (319,795 records)"
+    ),
+    version="2.0.0"
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # production-এ Vercel URL লিখো
+    allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── RuleNet (training-এর মতোই) ────────────────────────────────────────────────
-class RuleNetClassifier:
-    def __init__(self, rf_model):
-        self.rf_model = rf_model
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "model")
 
-    def predict(self, X):
-        rule_preds = self._rules(X)
-        out = []
-        for i, rp in enumerate(rule_preds):
-            out.append(rp if rp != -1 else int(self.rf_model.predict([X[i]])[0]))
-        return np.array(out)
+def load_artifact(filename):
+    path = os.path.join(MODEL_DIR, filename)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{filename} not found. Run model/train_model.py first.")
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
-    def predict_proba(self, X):
-        probas = []
-        for i, rp in enumerate(self._rules(X)):
-            if rp != -1:
-                probas.append([0.1, 0.9] if rp == 1 else [0.9, 0.1])
-            else:
-                probas.append(self.rf_model.predict_proba([X[i]])[0].tolist())
-        return np.array(probas)
+try:
+    model          = load_artifact("best_model.pkl")
+    label_encoders = load_artifact("label_encoders.pkl")
+    imputer        = load_artifact("imputer.pkl")
+    with open(os.path.join(MODEL_DIR, "model_metrics.json")) as f:
+        model_metrics = json.load(f)
+    print("All model artifacts loaded successfully")
+except FileNotFoundError as e:
+    print(f"Warning: {e}")
+    model = label_encoders = imputer = None
+    model_metrics = {}
 
-    def rule_fired(self, X) -> bool:
-        return self._rules(X)[0] != -1
+FEATURE_ORDER = [
+    "BMI","Smoking","AlcoholDrinking","Stroke","PhysicalHealth",
+    "MentalHealth","DiffWalking","Sex","AgeCategory","Race",
+    "Diabetic","PhysicalActivity","GenHealth","SleepTime",
+    "Asthma","KidneyDisease","SkinCancer"
+]
 
-    def _rules(self, X):
-        out = []
-        for row in X:
-            if   row[0] > 35 and row[4] > 15:   out.append(1)   # BMI + PhysHealth
-            elif row[3] == 1 and row[8] >= 8:    out.append(1)   # Stroke + Age 60+
-            elif row[13] >= 8 and row[5] == 0:   out.append(0)   # Sleep + MentalHealth OK
-            else:                                out.append(-1)
-        return np.array(out)
+AGE_CATEGORIES = ["18-24","25-29","30-34","35-39","40-44","45-49","50-54","55-59","60-64","65-69","70-74","75-79","80 or older"]
+RACES          = ["White","Black","Asian","American Indian/Alaskan Native","Hispanic","Other"]
+GEN_HEALTH     = ["Excellent","Very good","Good","Fair","Poor"]
+DIABETIC_OPT   = ["No","No, borderline diabetes","Yes","Yes (during pregnancy)"]
 
-# ── Model Load ─────────────────────────────────────────────────────────────────
-rf_model       = None
-label_encoders = None
 
-@app.on_event("startup")
-def load_model():
-    global rf_model, label_encoders
-    base = os.path.dirname(__file__)
-    mp   = os.path.join(base, os.getenv("MODEL_PATH",   "best_rf_model.pkl"))
-    ep   = os.path.join(base, os.getenv("ENCODER_PATH", "label_encoders.pkl"))
-    if not os.path.exists(mp): raise RuntimeError(f"Model not found: {mp}")
-    if not os.path.exists(ep): raise RuntimeError(f"Encoders not found: {ep}")
-    with open(mp, "rb") as f: backbone = pickle.load(f)
-    with open(ep, "rb") as f: label_encoders = pickle.load(f)
-    rf_model = RuleNetClassifier(backbone)
-    print("✓ Model loaded")
+class PredictionRequest(BaseModel):
+    BMI:              float = Field(..., ge=10.0, le=70.0)
+    Smoking:          str
+    AlcoholDrinking:  str
+    Stroke:           str
+    PhysicalHealth:   float = Field(..., ge=0.0, le=30.0)
+    MentalHealth:     float = Field(..., ge=0.0, le=30.0)
+    DiffWalking:      str
+    Sex:              str
+    AgeCategory:      str
+    Race:             str
+    Diabetic:         str
+    PhysicalActivity: str
+    GenHealth:        str
+    SleepTime:        float = Field(..., ge=0.0, le=24.0)
+    Asthma:           str
+    KidneyDisease:    str
+    SkinCancer:       str
 
-# ── Schemas ────────────────────────────────────────────────────────────────────
-class PredictRequest(BaseModel):
-    BMI:             float = Field(..., ge=10, le=60,  example=25.0)
-    Smoking:         Literal["Yes","No"]
-    AlcoholDrinking: Literal["Yes","No"]
-    Stroke:          Literal["Yes","No"]
-    PhysicalHealth:  float = Field(..., ge=0, le=30, example=0)
-    MentalHealth:    float = Field(..., ge=0, le=30, example=0)
-    DiffWalking:     Literal["Yes","No"]
-    Sex:             Literal["Male","Female"]
-    AgeCategory:     Literal[
-        "18-24","25-29","30-34","35-39","40-44","45-49",
-        "50-54","55-59","60-64","65-69","70-74","75-79","80 or older"
-    ]
-    Race: Literal[
-        "White","Black","Asian",
-        "American Indian/Alaskan Native","Hispanic","Other"
-    ]
-    Diabetic: Literal[
-        "Yes","No","No, borderline diabetes","Yes (during pregnancy)"
-    ]
-    PhysicalActivity: Literal["Yes","No"]
-    GenHealth:        Literal["Excellent","Very good","Good","Fair","Poor"]
-    SleepTime:        float = Field(..., ge=0, le=24, example=7)
-    Asthma:           Literal["Yes","No"]
-    KidneyDisease:    Literal["Yes","No"]
-    SkinCancer:       Literal["Yes","No"]
+    @validator("AgeCategory")
+    def v_age(cls, v):
+        if v not in AGE_CATEGORIES: raise ValueError(f"Must be one of: {AGE_CATEGORIES}")
+        return v
 
-    @field_validator("BMI")
-    @classmethod
-    def round_bmi(cls, v): return round(v, 2)
+    @validator("Race")
+    def v_race(cls, v):
+        if v not in RACES: raise ValueError(f"Must be one of: {RACES}")
+        return v
+
+    @validator("GenHealth")
+    def v_health(cls, v):
+        if v not in GEN_HEALTH: raise ValueError(f"Must be one of: {GEN_HEALTH}")
+        return v
+
+    @validator("Diabetic")
+    def v_diabetic(cls, v):
+        if v not in DIABETIC_OPT: raise ValueError(f"Must be one of: {DIABETIC_OPT}")
+        return v
+
+    @validator("Smoking","AlcoholDrinking","Stroke","DiffWalking",
+               "PhysicalActivity","Asthma","KidneyDisease","SkinCancer")
+    def v_yesno(cls, v):
+        if v not in ["Yes","No"]: raise ValueError("Must be 'Yes' or 'No'")
+        return v
+
+    @validator("Sex")
+    def v_sex(cls, v):
+        if v not in ["Male","Female"]: raise ValueError("Must be 'Male' or 'Female'")
+        return v
+
 
 class RiskFactor(BaseModel):
-    factor:      str
-    value:       str
-    description: str
-    severity:    Literal["high","medium","low"]
+    factor: str
+    value:  str
+    impact: str
+    advice: str
 
-class Recommendation(BaseModel):
-    title:       str
-    description: str
-    icon:        str
-    priority:    Literal["urgent","important","suggested"]
 
-class PredictResponse(BaseModel):
-    prediction:      int          # 0 / 1
-    probability:     float        # 0.0–1.0
-    risk_level:      str          # Low / Moderate / High / Very High
+class PredictionResponse(BaseModel):
+    prediction:      int
+    risk_label:      str
+    probability:     float
+    risk_percentage: float
+    risk_level:      str
     risk_factors:    list[RiskFactor]
-    recommendations: list[Recommendation]
+    recommendations: list[str]
     model_used:      str
-    confidence:      str
+    disclaimer:      str
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-def _enc(col, val):
-    return int(label_encoders[col].transform([val])[0])
 
-def encode(d: PredictRequest) -> np.ndarray:
-    return np.array([[
-        d.BMI,
-        _enc("Smoking", d.Smoking),
-        _enc("AlcoholDrinking", d.AlcoholDrinking),
-        _enc("Stroke", d.Stroke),
-        d.PhysicalHealth,
-        d.MentalHealth,
-        _enc("DiffWalking", d.DiffWalking),
-        _enc("Sex", d.Sex),
-        _enc("AgeCategory", d.AgeCategory),
-        _enc("Race", d.Race),
-        _enc("Diabetic", d.Diabetic),
-        _enc("PhysicalActivity", d.PhysicalActivity),
-        _enc("GenHealth", d.GenHealth),
-        d.SleepTime,
-        _enc("Asthma", d.Asthma),
-        _enc("KidneyDisease", d.KidneyDisease),
-        _enc("SkinCancer", d.SkinCancer),
-    ]])
+def encode_input(data: PredictionRequest) -> np.ndarray:
+    raw = data.dict()
+    encoded = {}
+    for col, le in label_encoders.items():
+        if col in raw:
+            try:
+                encoded[col] = le.transform([raw[col]])[0]
+            except ValueError:
+                raise HTTPException(422, f"Invalid value '{raw[col]}' for '{col}'.")
+    vector = [float(encoded[f]) if f in encoded else float(raw[f]) for f in FEATURE_ORDER]
+    return imputer.transform(np.array([vector]))
 
-def risk_level(p: float) -> str:
+
+def get_risk_level(p: float) -> str:
     if p < 0.25: return "Low"
     if p < 0.50: return "Moderate"
     if p < 0.75: return "High"
     return "Very High"
 
-def confidence_label(p: float) -> str:
-    diff = abs(p - 0.5)
-    if diff > 0.35: return "Very High"
-    if diff > 0.20: return "High"
-    if diff > 0.10: return "Moderate"
-    return "Low"
 
-def build_risk_factors(d: PredictRequest) -> list[RiskFactor]:
-    f = []
-    if d.BMI >= 30:
-        f.append(RiskFactor(factor="High BMI", value=f"{d.BMI:.1f}",
-            description="Obesity raises cardiovascular risk significantly.",
-            severity="high" if d.BMI >= 35 else "medium"))
-    if d.Smoking == "Yes":
-        f.append(RiskFactor(factor="Smoking", value="Active Smoker",
-            description="Smoking doubles the risk of heart disease.",
-            severity="high"))
-    if d.Stroke == "Yes":
-        f.append(RiskFactor(factor="Previous Stroke", value="History Present",
-            description="Prior stroke is a strong predictor of heart disease.",
-            severity="high"))
-    if d.Diabetic in ("Yes","No, borderline diabetes"):
-        f.append(RiskFactor(factor="Diabetes / Pre-Diabetes", value=d.Diabetic,
-            description="Diabetes raises heart disease risk 2–4×.",
-            severity="high" if d.Diabetic == "Yes" else "medium"))
-    if d.KidneyDisease == "Yes":
-        f.append(RiskFactor(factor="Kidney Disease", value="Diagnosed",
-            description="Chronic kidney disease is strongly linked to CVD.",
-            severity="high"))
-    if d.PhysicalHealth > 15:
-        f.append(RiskFactor(factor="Poor Physical Health", value=f"{int(d.PhysicalHealth)} days/mo",
-            description="Frequent unhealthy days indicate chronic conditions.",
-            severity="medium"))
-    if d.DiffWalking == "Yes":
-        f.append(RiskFactor(factor="Difficulty Walking", value="Yes",
-            description="Mobility issues correlate with reduced cardio fitness.",
-            severity="medium"))
-    if d.AgeCategory in ("60-64","65-69","70-74","75-79","80 or older"):
-        f.append(RiskFactor(factor="Advanced Age", value=d.AgeCategory,
-            description="Age is a major non-modifiable cardiovascular risk factor.",
-            severity="medium"))
-    if d.PhysicalActivity == "No":
-        f.append(RiskFactor(factor="Sedentary Lifestyle", value="No Exercise",
-            description="Inactivity increases heart disease risk by up to 35%.",
-            severity="medium"))
-    if d.AlcoholDrinking == "Yes":
-        f.append(RiskFactor(factor="Heavy Alcohol Use", value="Yes",
-            description="Excess alcohol elevates blood pressure and heart risk.",
-            severity="low"))
-    if not (6 <= d.SleepTime <= 9):
-        f.append(RiskFactor(factor="Abnormal Sleep", value=f"{d.SleepTime:.0f} hrs/night",
-            description="Both too little and too much sleep affect heart health.",
-            severity="low"))
-    return f
+def analyze_risk_factors(data: PredictionRequest) -> list[RiskFactor]:
+    factors = []
+    if data.BMI >= 35:
+        factors.append(RiskFactor(factor="Severe Obesity", value=f"BMI {data.BMI:.1f}", impact="high", advice="Target BMI below 25 through structured diet and exercise with specialist guidance."))
+    elif data.BMI >= 30:
+        factors.append(RiskFactor(factor="Obesity", value=f"BMI {data.BMI:.1f}", impact="medium", advice="Aim for gradual weight loss of 0.5-1 kg/week through lifestyle changes."))
+    if data.Smoking == "Yes":
+        factors.append(RiskFactor(factor="Active Smoking", value="Yes", impact="high", advice="Enroll in a cessation program. Consider nicotine replacement therapy."))
+    if data.Stroke == "Yes":
+        factors.append(RiskFactor(factor="History of Stroke", value="Yes", impact="high", advice="Regular cardiac monitoring and cardiologist consultation required."))
+    if data.PhysicalHealth > 15:
+        factors.append(RiskFactor(factor="Poor Physical Health", value=f"{int(data.PhysicalHealth)} bad days/month", impact="high", advice="Seek comprehensive medical evaluation for underlying chronic conditions."))
+    elif data.PhysicalHealth > 7:
+        factors.append(RiskFactor(factor="Declining Physical Health", value=f"{int(data.PhysicalHealth)} bad days/month", impact="medium", advice="Monitor symptoms and discuss with your physician."))
+    age_idx = AGE_CATEGORIES.index(data.AgeCategory)
+    if age_idx >= 10:
+        factors.append(RiskFactor(factor="Advanced Age (70+)", value=data.AgeCategory, impact="high", advice="Annual cardiac checkups strongly recommended."))
+    elif age_idx >= 8:
+        factors.append(RiskFactor(factor="Age 60-69", value=data.AgeCategory, impact="medium", advice="Regular health screenings every 6 months advised."))
+    if data.Diabetic in ["Yes","Yes (during pregnancy)"]:
+        factors.append(RiskFactor(factor="Diabetes", value=data.Diabetic, impact="high", advice="Strict blood sugar control. Regular HbA1c monitoring is essential."))
+    elif data.Diabetic == "No, borderline diabetes":
+        factors.append(RiskFactor(factor="Borderline Diabetes", value=data.Diabetic, impact="medium", advice="Diet modification and regular glucose monitoring recommended."))
+    if data.PhysicalActivity == "No":
+        factors.append(RiskFactor(factor="Sedentary Lifestyle", value="No regular exercise", impact="medium", advice="Aim for 150 minutes/week of moderate aerobic activity."))
+    if data.KidneyDisease == "Yes":
+        factors.append(RiskFactor(factor="Kidney Disease", value="Yes", impact="high", advice="CKD significantly elevates cardiovascular risk. Specialist consultation needed."))
+    if data.SleepTime < 6 or data.SleepTime > 9:
+        factors.append(RiskFactor(factor="Poor Sleep Duration", value=f"{data.SleepTime:.0f} hrs/night", impact="low", advice="Target 7-9 hours nightly. Evaluate for sleep apnea if needed."))
+    if data.AlcoholDrinking == "Yes":
+        factors.append(RiskFactor(factor="Heavy Alcohol Consumption", value="Yes", impact="medium", advice="Reduce to 2 or fewer drinks/day (men) or 1 (women)."))
+    return factors
 
-def build_recommendations(d: PredictRequest) -> list[Recommendation]:
-    r = []
-    if d.Smoking == "Yes":
-        r.append(Recommendation(title="Quit Smoking", icon="🚭",
-            description="Risk drops 50% within 1 year of quitting. Join a cessation program.",
-            priority="urgent"))
-    if d.Stroke == "Yes" or d.KidneyDisease == "Yes":
-        r.append(Recommendation(title="See a Cardiologist", icon="🏥",
-            description="Schedule an appointment for ECG, blood panel, and stress test.",
-            priority="urgent"))
-    if d.BMI >= 30:
-        r.append(Recommendation(title="Weight Management", icon="🥗",
-            description="A 5–10% weight loss can significantly cut heart disease risk.",
-            priority="important"))
-    if d.PhysicalActivity == "No":
-        r.append(Recommendation(title="Start Exercising", icon="🏃",
-            description="150 min/week of moderate aerobic activity. Start with daily walks.",
-            priority="important"))
-    if d.Diabetic in ("Yes","No, borderline diabetes"):
-        r.append(Recommendation(title="Blood Sugar Control", icon="💉",
-            description="Monitor HbA1c regularly. Diet and medication adherence are critical.",
-            priority="important"))
-    if d.SleepTime < 7:
-        r.append(Recommendation(title="Improve Sleep", icon="😴",
-            description="Target 7–9 hours nightly. Consistent schedule reduces cardiac stress.",
-            priority="suggested"))
-    if d.MentalHealth > 10:
-        r.append(Recommendation(title="Mental Health Support", icon="🧠",
-            description="Chronic stress elevates cortisol which damages the heart.",
-            priority="suggested"))
-    if d.AlcoholDrinking == "Yes":
-        r.append(Recommendation(title="Reduce Alcohol", icon="🍹",
-            description="Limit to ≤1 drink/day (women) or ≤2 drinks/day (men).",
-            priority="suggested"))
-    if not r:
-        r.append(Recommendation(title="Keep It Up!", icon="✅",
-            description="Maintain regular exercise, balanced diet, adequate sleep, and annual check-ups.",
-            priority="suggested"))
-    return r
 
-# ── Routes ─────────────────────────────────────────────────────────────────────
-@app.get("/")
+def generate_recommendations(data: PredictionRequest, prediction: int) -> list[str]:
+    recs = []
+    if prediction == 1:
+        recs.append("Consult a cardiologist for a full cardiac evaluation as soon as possible.")
+        recs.append("Request ECG, echocardiogram, stress test, and comprehensive blood panel.")
+    if data.BMI >= 30:
+        recs.append("Work with a registered dietitian for a heart-healthy, calorie-controlled meal plan.")
+    if data.Smoking == "Yes":
+        recs.append("Smoking cessation is the single most impactful lifestyle change for heart health.")
+    if data.PhysicalActivity == "No":
+        recs.append("Start with 20-30 min daily walks and gradually build to 150 min/week.")
+    if data.SleepTime < 7:
+        recs.append("Prioritize 7-9 hours of sleep with a consistent schedule.")
+    if data.MentalHealth > 10:
+        recs.append("Chronic stress elevates cardiac risk. Consider counseling or mindfulness practices.")
+    if data.Diabetic in ["Yes","No, borderline diabetes"]:
+        recs.append("Maintain HbA1c below 7%. Work with an endocrinologist on glucose management.")
+    if data.AlcoholDrinking == "Yes":
+        recs.append("Reduce alcohol intake significantly. Seek professional support if needed.")
+    recs.append("Schedule annual health screenings: cholesterol, blood pressure, and blood glucose.")
+    return recs
+
+
+@app.get("/", tags=["Info"])
 def root():
-    return {"message": "Heart Disease Prediction API v2.0 — DIU FYDP", "status": "ok"}
+    return {
+        "project": "Predicting Heart Disease Using Machine Learning",
+        "subtitle": "An Analysis of Risk Factors, Model Optimization, and Web-Based Deployment",
+        "author": "Md. Tuhinuzzaman Tuhin (221-15-4649)",
+        "institution": "Daffodil International University",
+        "year": 2025,
+        "docs": "/docs",
+        "status": "model_loaded" if model else "model_not_loaded"
+    }
 
-@app.get("/health")
+
+@app.get("/health", tags=["Info"])
 def health():
-    return {"status": "ok", "model_loaded": rf_model is not None}
+    return {"status": "healthy", "model_loaded": model is not None}
 
-@app.post("/api/predict", response_model=PredictResponse)
-def predict(data: PredictRequest):
-    if rf_model is None:
-        raise HTTPException(503, "Model not loaded")
+
+@app.get("/metrics", tags=["Model"])
+def get_metrics():
+    if not model_metrics:
+        raise HTTPException(503, "Metrics not available. Run model/train_model.py first.")
+    return model_metrics
+
+
+@app.get("/model-info", tags=["Model"])
+def model_info():
+    return {
+        "project": "Predicting Heart Disease Using Machine Learning",
+        "model": "RuleNet Hybrid Classifier",
+        "algorithm": "RandomForest + Medical Rules",
+        "dataset": "CDC BRFSS 2020",
+        "records": 319795,
+        "features": FEATURE_ORDER,
+        "balancing": "SMOTE",
+        "year": 2025,
+        "age_categories": AGE_CATEGORIES,
+        "race_options": RACES,
+        "gen_health_options": GEN_HEALTH,
+        "diabetic_options": DIABETIC_OPT,
+    }
+
+
+@app.post("/predict", response_model=PredictionResponse, tags=["Prediction"])
+def predict(request: PredictionRequest):
+    """Predict heart disease risk from 17 patient health parameters."""
+    if model is None:
+        raise HTTPException(503, "Model not loaded. Please run model/train_model.py first.")
     try:
-        X    = encode(data)
-        pred = int(rf_model.predict(X)[0])
-        prob = float(rf_model.predict_proba(X)[0][1])
-        used = "RuleNet (Rule)" if rf_model.rule_fired(X) else "RuleNet (RF)"
-        return PredictResponse(
-            prediction=pred,
-            probability=round(prob, 4),
-            risk_level=risk_level(prob),
-            risk_factors=build_risk_factors(data),
-            recommendations=build_recommendations(data),
-            model_used=used,
-            confidence=confidence_label(prob),
+        X           = encode_input(request)
+        prediction  = int(model.predict(X)[0])
+        probability = float(model.predict_proba(X)[0][1])
+        return PredictionResponse(
+            prediction=prediction,
+            risk_label="Elevated Risk" if prediction == 1 else "Low Risk",
+            probability=round(probability, 4),
+            risk_percentage=round(probability * 100, 2),
+            risk_level=get_risk_level(probability),
+            risk_factors=analyze_risk_factors(request),
+            recommendations=generate_recommendations(request, prediction),
+            model_used="RuleNet (RandomForest + Medical Rules)",
+            disclaimer=(
+                "This tool provides AI-based risk assessment only and is NOT a medical diagnosis. "
+                "Always consult a qualified healthcare professional for medical advice."
+            )
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, f"Prediction error: {str(e)}")
